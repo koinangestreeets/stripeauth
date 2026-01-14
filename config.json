@@ -8,9 +8,9 @@
   ],
   "enable_proxy_rotation": false,
   "retry_config": {
-    "max_retries": 3,
+    "max_retries": 1,
     "initial_delay": 1,
-    "max_delay": 10,
+    "max_delay": 5,
     "backoff_factor": 2
   },
   "payment_urls": [
@@ -46,9 +46,9 @@
   ],
   "default_stripe_key": "pk_test_51SpSPLLf6T8pW60rKPen6QmTu4gPJxKJxiSbySL9Mxp2C3Xv7e1GUSMIok7uBnn94qgOlXJVmZSVL9I7EEkkeAfa00GDahZtfW",
   "test_domains": [
-    "woostify-demo1.myshopify.com",
-    "demo.woothemes.com",
-    "demo1.woocommerce.com"
+    "bookandpencil.com",
+    "scandinavia-furniture.dk",
+    "store.woocommerce.com"
   ],
   "user_agents": [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",

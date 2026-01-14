@@ -220,12 +220,12 @@ class HTTPSessionManager:
         """Create a requests session with retry strategy"""
         session = requests.Session()
         
-        # Configure retries
+        # Configure retries - reduced from 3 to 1 to prevent timeouts
         retry_strategy = URLRetry(
-            total=3,
+            total=1,
             status_forcelist=[429, 500, 502, 503, 504],
             allowed_methods=["HEAD", "GET", "OPTIONS", "POST"],
-            backoff_factor=1
+            backoff_factor=0.5
         )
         
         adapter = HTTPAdapter(max_retries=retry_strategy)
@@ -241,7 +241,7 @@ class HTTPSessionManager:
         """GET request with proxy and retry"""
         kwargs['proxies'] = self.proxy_rotator.get_proxy()
         kwargs['verify'] = False
-        kwargs['timeout'] = kwargs.get('timeout', 15)
+        kwargs['timeout'] = kwargs.get('timeout', 5)
         
         return self.retry_handler.retry_with_backoff(self.session.get, url, **kwargs)
     
@@ -249,7 +249,7 @@ class HTTPSessionManager:
         """POST request with proxy and retry"""
         kwargs['proxies'] = self.proxy_rotator.get_proxy()
         kwargs['verify'] = False
-        kwargs['timeout'] = kwargs.get('timeout', 15)
+        kwargs['timeout'] = kwargs.get('timeout', 5)
         
         return self.retry_handler.retry_with_backoff(self.session.post, url, **kwargs)
     
