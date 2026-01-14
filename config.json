@@ -1,10 +1,10 @@
 {
   "proxy_list": [
-    "http://proxy1.example.com:8080",
-    "http://proxy2.example.com:8080",
-    "http://proxy3.example.com:8080",
-    "http://proxy4.example.com:8080",
-    "http://proxy5.example.com:8080"
+    "187.216.229.150:8080",
+    "102.23.245.112:8080",
+    "157.15.144.82:8080",
+    "209.97.150.167:8080",
+    "203.142.74.115:8080"
   ],
   "enable_proxy_rotation": false,
   "retry_config": {
