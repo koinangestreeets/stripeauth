@@ -979,7 +979,8 @@ def get_stripe_key(domain):
         try:
             logger.debug(f"Trying URL: {url}")
             # Use a direct session without retries for key extraction to avoid timeouts
-            response = requests.get(url, timeout=5, allow_redirects=False, verify=False, headers=fingerprint.get_headers())
+            # Allow redirects to follow to the actual payment page
+            response = requests.get(url, timeout=5, allow_redirects=True, verify=False, headers=fingerprint.get_headers())
             if response.status_code == 200:
                 key = StripeKeyExtractor.extract(response.text)
                 if key:
@@ -993,8 +994,8 @@ def get_stripe_key(domain):
             continue
     
     # Fall back to default key from config
-    default_key = config_manager.get("default_stripe_key", "pk_live_test")
-    logger.debug(f"No Stripe key found for {domain}, using default: {default_key[:20]}...")
+    default_key = config_manager.get("default_stripe_key", "pk_live_51234567890123456789012345")
+    logger.debug(f"No Stripe key found for {domain}, using default key")
     return default_key
 
 def create_http_session():
@@ -1074,7 +1075,7 @@ def process_card_enhanced(domain, ccx, use_registration=True):
     stripe_key = get_stripe_key(domain)
 
     if use_registration:
-        registered, reg_message = register_account(domain, session.session)
+        registered, reg_message = register_account(domain, session)
     
     # Get payment URLs from config
     payment_urls = [f"https://{domain}{path}" for path in config_manager.get("payment_urls", ["/"])]
