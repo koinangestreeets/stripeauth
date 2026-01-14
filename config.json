@@ -44,6 +44,7 @@
       }
     }
   ],
+  "default_stripe_key": "pk_live_test",
   "test_domains": [
     "example-shop1.com",
     "example-store2.com",

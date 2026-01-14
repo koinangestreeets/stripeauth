@@ -969,7 +969,7 @@ def extract_nonce_from_page(html_content, domain=""):
     return NonceExtractor.extract(html_content, domain)
 
 def get_stripe_key(domain):
-    """Extract Stripe publishable key from domain"""
+    """Extract Stripe publishable key from domain, fall back to default"""
     logger.debug(f"Getting Stripe key for domain: {domain}")
     
     payment_urls = config_manager.get("payment_urls", [])
@@ -992,8 +992,10 @@ def get_stripe_key(domain):
             logger.debug(f"Error getting Stripe key from {url}: {e}")
             continue
     
-    logger.debug(f"No Stripe key found for {domain}, returning None")
-    return None
+    # Fall back to default key from config
+    default_key = config_manager.get("default_stripe_key", "pk_live_test")
+    logger.debug(f"No Stripe key found for {domain}, using default: {default_key[:20]}...")
+    return default_key
 
 def create_http_session():
     """Create a new HTTP session with all features"""
