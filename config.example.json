@@ -1,0 +1,83 @@
+{
+  "# ============= PROXY CONFIGURATION =============": null,
+  "enable_proxy_rotation": false,
+  "# ^ Set to true to enable automatic proxy rotation. Helps avoid IP-based blocking.": null,
+  
+  "proxy_list": [
+    "http://proxy1.example.com:8080",
+    "http://proxy2.example.com:8080",
+    "http://proxy3.example.com:8080",
+    "http://proxy4.example.com:8080",
+    "http://proxy5.example.com:8080"
+  ],
+  "# ^ Add your proxy servers here. Format: http://host:port or https://host:port": null,
+  
+  "# ============= RETRY CONFIGURATION =============": null,
+  "retry_config": {
+    "max_retries": 3,
+    "# ^ Maximum number of retry attempts for network errors": null,
+    
+    "initial_delay": 1,
+    "# ^ Initial delay in seconds before first retry": null,
+    
+    "max_delay": 10,
+    "# ^ Maximum delay cap in seconds": null,
+    
+    "backoff_factor": 2,
+    "# ^ Multiplier for exponential backoff (delay * backoff_factor)": null
+  },
+  
+  "# ============= PAYMENT URLS =============": null,
+  "payment_urls": [
+    "/my-account/add-payment-method/",
+    "/checkout/",
+    "/my-account/",
+    "/wp-admin/admin-ajax.php",
+    "/"
+  ],
+  "# ^ URLs to try when extracting nonces. Prepended with https://domain": null,
+  
+  "# ============= AJAX PAYLOADS =============": null,
+  "ajax_payloads": [
+    {
+      "action": "wc_stripe_create_and_confirm_setup_intent",
+      "fields": {
+        "wc-stripe-payment-method": "payment_method_id",
+        "wc-stripe-payment-type": "card",
+        "_ajax_nonce": "nonce"
+      }
+    },
+    {
+      "action": "wc_stripe_create_setup_intent",
+      "fields": {
+        "payment_method_id": "payment_method_id",
+        "_wpnonce": "nonce"
+      }
+    },
+    {
+      "action": "wc_stripe_confirm_payment",
+      "fields": {
+        "payment_method_id": "payment_method_id",
+        "_nonce": "nonce"
+      }
+    }
+  ],
+  "# ^ Dynamic AJAX payloads. Placeholders: 'payment_method_id', 'nonce'": null,
+  
+  "# ============= TEST DOMAINS =============": null,
+  "test_domains": [
+    "example-shop1.com",
+    "example-store2.com",
+    "demo-woocommerce3.com"
+  ],
+  "# ^ Domains used in /bulk endpoint for concurrent testing": null,
+  
+  "# ============= USER AGENTS =============": null,
+  "user_agents": [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+  ],
+  "# ^ Custom user agents. Leave empty to use fake-useragent library": null
+}
