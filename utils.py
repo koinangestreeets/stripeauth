@@ -264,8 +264,11 @@ class HTTPSessionManager:
         
         response = self.retry_handler.retry_with_backoff(self.session.get, url, **kwargs)
         
-        # Ensure text is properly decompressed
-        response._content = decompress_response(response).encode('utf-8')
+        # Only decompress HTML/text content, not JSON from APIs
+        content_type = response.headers.get('Content-Type', '').lower()
+        if 'text/html' in content_type or 'text/plain' in content_type:
+            response._content = decompress_response(response).encode('utf-8')
+        
         return response
     
     def post(self, url: str, **kwargs) -> requests.Response:
@@ -276,8 +279,11 @@ class HTTPSessionManager:
         
         response = self.retry_handler.retry_with_backoff(self.session.post, url, **kwargs)
         
-        # Ensure text is properly decompressed
-        response._content = decompress_response(response).encode('utf-8')
+        # Only decompress HTML/text content, not JSON from APIs
+        content_type = response.headers.get('Content-Type', '').lower()
+        if 'text/html' in content_type or 'text/plain' in content_type:
+            response._content = decompress_response(response).encode('utf-8')
+        
         return response
     
     def close(self):

@@ -1139,7 +1139,12 @@ def process_card_enhanced(domain, ccx, use_registration=True):
             timeout=10,
             verify=False
         )
-        pm_data = pm_response.json()
+        
+        try:
+            pm_data = pm_response.json()
+        except ValueError as je:
+            logger.error(f"Failed to parse payment method response as JSON: {je}, response text: {pm_response.text[:200]}")
+            return {"Response": "Invalid response from payment processor", "Status": "Declined"}
 
         if 'id' not in pm_data:
             error_msg = pm_data.get('error', {}).get('message', 'Unknown payment method error')
@@ -1149,7 +1154,7 @@ def process_card_enhanced(domain, ccx, use_registration=True):
         payment_method_id = pm_data['id']
         logger.debug(f"Payment method created: {payment_method_id}")
     except Exception as e:
-        logger.error(f"Payment Method Creation Failed: {e}")
+        logger.error(f"Payment Method Creation Failed: {e}", exc_info=True)
         return {"Response": f"Payment Method Creation Failed: {str(e)}", "Status": "Declined"}
     
     # Use configurable payloads
@@ -1275,14 +1280,25 @@ def process_request():
         
         result = process_card_enhanced(domain, cc)
         
+        # Ensure result is a valid dict
+        if not isinstance(result, dict):
+            logger.error(f"Invalid result type: {type(result)}")
+            return jsonify({
+                "Response": "Internal server error",
+                "Status": "Error"
+            }), 500
+        
         # Ensure consistent response format
         return jsonify({
             "Response": result.get("Response", result.get("response", "Unknown response")),
             "Status": result.get("Status", result.get("status", "Unknown status"))
         })
     except Exception as e:
-        logger.error(f"Process request error: {e}")
-        return jsonify({"error": f"Internal server error: {str(e)}", "status": "Error"}), 500
+        logger.error(f"Process request error: {e}", exc_info=True)
+        return jsonify({
+            "Response": "Internal server error",
+            "Status": "Error"
+        }), 500
 
 @app.route('/bulk')
 def bulk_process_request():
