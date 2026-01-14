@@ -44,7 +44,7 @@
       }
     }
   ],
-  "default_stripe_key": "pk_live_51IHxqFDMKhJ8X4qVFKfL7vxT6mQpR8sN2vWxYzAbCdEfGhIjKlMnOpQrStUvWxYzAbCdEfGhIjKlMnOpQr",
+  "default_stripe_key": "pk_test_51234567890abcdefghijklmnopqrstuvwxyz1234567890abcdefghijklmnopqr",
   "test_domains": [
     "example-shop1.com",
     "example-store2.com",
