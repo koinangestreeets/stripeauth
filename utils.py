@@ -320,13 +320,15 @@ class NonceExtractor:
                 for match in matches:
                     try:
                         nonce = match.group(1).strip()
-                        # Validate nonce - must be alphanumeric + underscore/hyphen, 5-256 chars
-                        if nonce and 5 <= len(nonce) < 256 and re.match(r'^[a-zA-Z0-9_\-]+$', nonce):
-                            if nonce not in nonces_found:
-                                nonces_found.append(nonce)
-                                logger.debug(f"Found nonce via pattern {i}: {nonce[:30]}...")
-                                # Return first valid nonce found
-                                return nonce
+                        # Validate nonce - be lenient with validation
+                        if nonce and 5 <= len(nonce) < 256:
+                            # Accept alphanumeric, underscore, hyphen, and common special chars in nonces
+                            if re.match(r'^[a-zA-Z0-9_\-+=/.]+$', nonce):
+                                if nonce not in nonces_found:
+                                    nonces_found.append(nonce)
+                                    logger.debug(f"Found nonce via pattern {i}: {nonce[:30]}...")
+                                    # Return first valid nonce found
+                                    return nonce
                     except (IndexError, AttributeError):
                         continue
             except Exception as e:
@@ -337,31 +339,56 @@ class NonceExtractor:
             logger.debug(f"Found {len(nonces_found)} nonce candidates: {[n[:20] for n in nonces_found[:3]]}")
             return nonces_found[0]
         
-        logger.debug(f"No nonce found in {len(html_content)} bytes. HTML preview: {html_content[:300]}")
+        logger.debug(f"No nonce found in {len(html_content)} bytes. Trying fallback extraction...")
         
         # Fallback: try to extract any valid token-like string near "nonce" keyword
         return NonceExtractor._fallback_extract(html_content)
     
     @staticmethod
     def _fallback_extract(html_content: str) -> Optional[str]:
-        """Fallback extraction: find any valid nonce-like token"""
+        """Fallback extraction: find any valid nonce-like token with aggressive search"""
         try:
-            # Find all occurrences of word "nonce" and look for nearby quotes/values
+            # Strategy 1: Find all occurrences of word "nonce" and look for nearby quoted values
             nonce_positions = [m.start() for m in re.finditer(r'nonce', html_content, re.IGNORECASE)]
             
             for pos in nonce_positions:
-                # Look at surrounding 200 chars
-                start = max(0, pos - 100)
-                end = min(len(html_content), pos + 150)
+                # Look at surrounding context (300 chars forward)
+                start = max(0, pos)
+                end = min(len(html_content), pos + 300)
                 context = html_content[start:end]
                 
-                # Try to extract quoted value after nonce
-                match = re.search(r'["\']([a-zA-Z0-9_\-]{10,})["\']', context)
-                if match:
-                    token = match.group(1)
-                    if re.match(r'^[a-zA-Z0-9_\-]+$', token) and 10 <= len(token) < 256:
-                        logger.debug(f"Fallback extracted nonce: {token[:30]}...")
-                        return token
+                # Try multiple patterns to find quoted value after nonce
+                # Pattern 1: quoted strings of various lengths
+                for pattern in [
+                    r'["\']([a-zA-Z0-9_\-+=/.]{15,})["\']',  # Longer tokens
+                    r'["\']([a-zA-Z0-9_\-+=/.]{10,})["\']',  # Medium tokens
+                    r'["\']([a-zA-Z0-9_\-]{8,})["\']',       # Short tokens
+                    r'value=["\']([^"\']+)["\']',            # HTML input values
+                ]:
+                    match = re.search(pattern, context)
+                    if match:
+                        token = match.group(1).strip()
+                        if token and 8 <= len(token) < 300:
+                            logger.debug(f"Fallback extracted nonce: {token[:30]}...")
+                            return token
+            
+            # Strategy 2: Look for any long string that resembles a token/nonce
+            # This catches nonces that aren't explicitly labeled
+            potential_tokens = re.findall(r'["\']([a-zA-Z0-9_\-+=/.]{20,})["\']', html_content)
+            if potential_tokens:
+                # Return longest token (likely to be the real nonce)
+                token = max(potential_tokens, key=len)
+                if token and not any(x in token.lower() for x in ['href', 'src', 'data:', 'http']):
+                    logger.debug(f"Fallback extracted long token: {token[:30]}...")
+                    return token
+            
+            # Strategy 3: Look for base64-like strings (nonces are often base64)
+            base64_tokens = re.findall(r'["\']([A-Za-z0-9+/]{20,}={0,2})["\']', html_content)
+            if base64_tokens:
+                token = base64_tokens[0]
+                logger.debug(f"Fallback extracted base64 token: {token[:30]}...")
+                return token
+        
         except Exception as e:
             logger.debug(f"Fallback extraction error: {e}")
         
