@@ -978,7 +978,7 @@ def get_stripe_key(domain):
     for url in urls_to_try:
         try:
             logger.debug(f"Trying URL: {url}")
-            response = http_session_manager.get(url, timeout=10, allow_redirects=True)
+            response = http_session_manager.session.get(url, timeout=10, allow_redirects=True, verify=False)
             if response.status_code == 200:
                 key = StripeKeyExtractor.extract(response.text)
                 if key:
@@ -999,7 +999,7 @@ def register_account(domain, session):
     """Register account on domain"""
     logger.debug(f"Registering account on {domain}")
     try:
-        reg_response = session.get(f"https://{domain}/my-account/", timeout=10, allow_redirects=True)
+        reg_response = session.session.get(f"https://{domain}/my-account/", timeout=10, allow_redirects=True, verify=False)
         
         reg_nonce = extract_nonce_from_page(reg_response.text, domain)
         
@@ -1018,11 +1018,12 @@ def register_account(domain, session):
             'register': 'Register'
         }
         
-        reg_result = session.post(
+        reg_result = session.session.post(
             f"https://{domain}/my-account/",
             data=reg_data,
             headers={'Referer': f'https://{domain}/my-account/'},
-            timeout=15
+            timeout=15,
+            verify=False
         )
         
         if 'Log out' in reg_result.text or 'My Account' in reg_result.text:
@@ -1351,7 +1352,7 @@ def debug_nonce():
     
     for url in payment_urls:
         try:
-            response = session_manager.get(url, allow_redirects=True)
+            response = session_manager.session.get(url, allow_redirects=True, verify=False)
             nonce = extract_nonce_from_page(response.text, domain)
             
             attempt = {
