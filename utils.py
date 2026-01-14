@@ -15,6 +15,8 @@ import aiohttp
 from typing import Optional, Dict, List, Tuple
 import random
 import string
+import gzip
+import zlib
 
 logger = logging.getLogger(__name__)
 
@@ -205,6 +207,22 @@ class RetryHandler:
         raise last_exception
 
 
+def decompress_response(response: requests.Response) -> str:
+    """Decompress gzip/deflate encoded response content"""
+    try:
+        content_encoding = response.headers.get('Content-Encoding', '').lower()
+        
+        if content_encoding == 'gzip':
+            return gzip.decompress(response.content).decode('utf-8', errors='ignore')
+        elif content_encoding == 'deflate':
+            return zlib.decompress(response.content).decode('utf-8', errors='ignore')
+        else:
+            return response.text
+    except Exception as e:
+        logger.debug(f"Failed to decompress response: {e}")
+        return response.text
+
+
 class HTTPSessionManager:
     """Manages HTTP sessions with retry strategy and proxies"""
     
@@ -220,20 +238,21 @@ class HTTPSessionManager:
         """Create a requests session with retry strategy"""
         session = requests.Session()
         
-        # Configure retries - reduced from 3 to 1 to prevent timeouts
+        # Configure retries
         retry_strategy = URLRetry(
-            total=1,
+            total=3,
             status_forcelist=[429, 500, 502, 503, 504],
             allowed_methods=["HEAD", "GET", "OPTIONS", "POST"],
-            backoff_factor=0.5
+            backoff_factor=1
         )
         
         adapter = HTTPAdapter(max_retries=retry_strategy)
         session.mount("http://", adapter)
         session.mount("https://", adapter)
         
-        # Set headers
+        # Set headers and enable automatic decompression
         session.headers.update(self.fingerprint.get_headers())
+        session.headers['Accept-Encoding'] = 'gzip, deflate'
         
         return session
     
@@ -241,17 +260,25 @@ class HTTPSessionManager:
         """GET request with proxy and retry"""
         kwargs['proxies'] = self.proxy_rotator.get_proxy()
         kwargs['verify'] = False
-        kwargs['timeout'] = kwargs.get('timeout', 5)
+        kwargs['timeout'] = kwargs.get('timeout', 15)
         
-        return self.retry_handler.retry_with_backoff(self.session.get, url, **kwargs)
+        response = self.retry_handler.retry_with_backoff(self.session.get, url, **kwargs)
+        
+        # Ensure text is properly decompressed
+        response._content = decompress_response(response).encode('utf-8')
+        return response
     
     def post(self, url: str, **kwargs) -> requests.Response:
         """POST request with proxy and retry"""
         kwargs['proxies'] = self.proxy_rotator.get_proxy()
         kwargs['verify'] = False
-        kwargs['timeout'] = kwargs.get('timeout', 5)
+        kwargs['timeout'] = kwargs.get('timeout', 15)
         
-        return self.retry_handler.retry_with_backoff(self.session.post, url, **kwargs)
+        response = self.retry_handler.retry_with_backoff(self.session.post, url, **kwargs)
+        
+        # Ensure text is properly decompressed
+        response._content = decompress_response(response).encode('utf-8')
+        return response
     
     def close(self):
         """Close the session"""
