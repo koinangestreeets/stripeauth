@@ -964,6 +964,10 @@ def home():
 
 # ============= STRIPE PROCESSING FUNCTIONS =============
 
+def extract_nonce_from_page(html_content, domain=""):
+    """Wrapper function to extract nonce from page HTML"""
+    return NonceExtractor.extract(html_content, domain)
+
 def get_stripe_key(domain):
     """Extract Stripe publishable key from domain"""
     logger.debug(f"Getting Stripe key for domain: {domain}")
