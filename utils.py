@@ -263,7 +263,7 @@ class NonceExtractor:
     
     # Comprehensive pattern list
     PATTERNS = [
-        # WooCommerce Stripe patterns
+        # WooCommerce Stripe patterns (most specific first)
         r'createAndConfirmSetupIntentNonce["\']?\s*:\s*["\']([^"\']+)["\']',
         r'wc_stripe_create_and_confirm_setup_intent["\']?[^}]*nonce["\']?:\s*["\']([^"\']+)["\']',
         
@@ -272,47 +272,99 @@ class NonceExtractor:
         r'name=["\']_wpnonce["\'][^>]*value=["\']([^"\']+)["\']',
         r'name=["\']woocommerce-register-nonce["\'][^>]*value=["\']([^"\']+)["\']',
         r'name=["\']woocommerce-login-nonce["\'][^>]*value=["\']([^"\']+)["\']',
+        r'name=["\']nonce["\'][^>]*value=["\']([^"\']+)["\']',
         
         # Data attributes
         r'data-nonce=["\']([^"\']+)["\']',
         r'data-_nonce=["\']([^"\']+)["\']',
         r'data-security=["\']([^"\']+)["\']',
+        r'data-nonce-value=["\']([^"\']+)["\']',
         
         # JavaScript variable patterns
         r'var\s+wc_stripe_params\s*=\s*\{[^}]*"nonce"\s*:\s*"([^"]+)"',
         r'var\s+stripe_params\s*=\s*\{[^}]*"nonce"\s*:\s*"([^"]+)"',
         r'var\s+wc_checkout_params\s*=\s*\{[^}]*"nonce"\s*:\s*"([^"]+)"',
+        r'wc_stripe_params\s*=\s*\{[^}]*nonce["\']?\s*:\s*["\']([^"\']+)["\']',
         
-        # Generic nonce patterns (more flexible)
-        r'nonce["\']?\s*:\s*["\']([a-zA-Z0-9]+)["\']',
-        r'"nonce"\s*:\s*"([a-zA-Z0-9]+)"',
-        r"'nonce'\s*:\s*'([a-zA-Z0-9]+)'",
+        # JSON embedded nonces
+        r'"nonce"\s*:\s*"([a-zA-Z0-9_-]+)"',
+        r"'nonce'\s*:\s*'([a-zA-Z0-9_-]+)'",
+        r'"nonce"\s*:\s*"([^"]+)"',
+        r'nonce["\']?\s*:\s*["\']([a-zA-Z0-9_-]+)["\']',
+        
+        # Input fields
+        r'<input[^>]*name=["\']nonce["\'][^>]*value=["\']([^"\']+)["\']',
+        r'<input[^>]*name=["\']_wpnonce["\'][^>]*value=["\']([^"\']+)["\']',
         
         # REST API nonce header patterns
         r'X-WP-Nonce["\']?\s*:\s*["\']([^"\']+)["\']',
+        
+        # Very generic patterns (catch-all)
+        r'nonce["\']?\s*[:=]\s*["\']([a-zA-Z0-9_\-]{10,})["\']',
+        r'value=["\']([a-zA-Z0-9_\-]{30,})["\'][^>]*nonce',
+        r'nonce["\']?["\']?\s*:\s*["\']([a-zA-Z0-9_\-]+)["\']',
     ]
     
     @staticmethod
     def extract(html_content: str, domain: str = "") -> Optional[str]:
-        """Extract nonce from HTML content"""
+        """Extract nonce from HTML content with comprehensive patterns"""
         if not html_content:
             logger.warning(f"Empty HTML content for domain {domain}")
             return None
         
+        nonces_found = []
+        
         for i, pattern in enumerate(NonceExtractor.PATTERNS):
             try:
-                match = re.search(pattern, html_content, re.IGNORECASE | re.DOTALL)
-                if match:
-                    nonce = match.group(1).strip()
-                    # Validate nonce
-                    if nonce and 5 <= len(nonce) < 256:
-                        logger.debug(f"Found nonce using pattern {i}: {nonce[:20]}...")
-                        return nonce
+                matches = re.finditer(pattern, html_content, re.IGNORECASE | re.DOTALL)
+                for match in matches:
+                    try:
+                        nonce = match.group(1).strip()
+                        # Validate nonce - must be alphanumeric + underscore/hyphen, 5-256 chars
+                        if nonce and 5 <= len(nonce) < 256 and re.match(r'^[a-zA-Z0-9_\-]+$', nonce):
+                            if nonce not in nonces_found:
+                                nonces_found.append(nonce)
+                                logger.debug(f"Found nonce via pattern {i}: {nonce[:30]}...")
+                                # Return first valid nonce found
+                                return nonce
+                    except (IndexError, AttributeError):
+                        continue
             except Exception as e:
                 logger.debug(f"Pattern {i} error: {e}")
                 continue
         
-        logger.debug(f"No nonce found. HTML preview: {html_content[:500]}")
+        if nonces_found:
+            logger.debug(f"Found {len(nonces_found)} nonce candidates: {[n[:20] for n in nonces_found[:3]]}")
+            return nonces_found[0]
+        
+        logger.debug(f"No nonce found in {len(html_content)} bytes. HTML preview: {html_content[:300]}")
+        
+        # Fallback: try to extract any valid token-like string near "nonce" keyword
+        return NonceExtractor._fallback_extract(html_content)
+    
+    @staticmethod
+    def _fallback_extract(html_content: str) -> Optional[str]:
+        """Fallback extraction: find any valid nonce-like token"""
+        try:
+            # Find all occurrences of word "nonce" and look for nearby quotes/values
+            nonce_positions = [m.start() for m in re.finditer(r'nonce', html_content, re.IGNORECASE)]
+            
+            for pos in nonce_positions:
+                # Look at surrounding 200 chars
+                start = max(0, pos - 100)
+                end = min(len(html_content), pos + 150)
+                context = html_content[start:end]
+                
+                # Try to extract quoted value after nonce
+                match = re.search(r'["\']([a-zA-Z0-9_\-]{10,})["\']', context)
+                if match:
+                    token = match.group(1)
+                    if re.match(r'^[a-zA-Z0-9_\-]+$', token) and 10 <= len(token) < 256:
+                        logger.debug(f"Fallback extracted nonce: {token[:30]}...")
+                        return token
+        except Exception as e:
+            logger.debug(f"Fallback extraction error: {e}")
+        
         return None
     
     @staticmethod
